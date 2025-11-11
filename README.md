@@ -18,16 +18,18 @@ Useful env vars:
 | `MOUSE_PIN`  | Pairing PIN that clients must enter | `8900`  |
 | `MOUSE_HOST` | Interface to bind                   | `0.0.0.0` |
 | `MOUSE_PORT` | Preferred local port when `PORT` is unset | `5000` |
+| `ENABLE_DEVICE_CONTROL` | Set to `0` to run in headless/no-op mode when real OS input is unavailable | `1` |
 
 Visit `http://<machine-ip>:<port>` from your phone and enter the PIN shown in the terminal.
 
-> **Note:** `pynput` sends real mouse/keyboard events on the host OS. The server must run on the computer you intend to control (background SSH/terminal-only hosts will not work).
+> **Note:** `pynput` sends real mouse/keyboard events on the host OS. The server must run on the computer you intend to control (background SSH/terminal-only hosts will not work). When `ENABLE_DEVICE_CONTROL=0` or pynput is unavailable, the app stays online for demo/testing but does not emit real input.
 
 ## Deploying on Railway
 
 1. Create a new Railway project and connect this repository (or push via `railway up`).
 2. Railway automatically provides a `PORT` env var; no extra config needed thanks to the `Procfile`.
-3. (Optional) Add `MOUSE_PIN` to Railway's environment variables to pick your own PIN.
-4. Deploy. Once the service is running, open the generated Railway domain in a mobile browser and pair with the PIN printed in the logs.
+3. Because Railway instances do not expose a GUI or input devices, set `ENABLE_DEVICE_CONTROL=0` (or leave it unset and the app will auto-fallback to no-op mode).
+4. (Optional) Add `MOUSE_PIN` to Railway's environment variables to pick your own PIN.
+5. Deploy. Once the service is running, open the generated Railway domain in a mobile browser and pair with the PIN printed in the logs.
 
 Because the app requires OS-level input access, deploying to Railway only makes sense if you expect to control that remote host.

@@ -3,23 +3,96 @@
 
 from flask import Flask, send_from_directory, request
 from flask_socketio import SocketIO, emit
-from pynput.mouse import Controller as MouseController, Button
-from pynput.keyboard import Controller as KeyboardController, Key
 import eventlet
 import os
 import socket
 from contextlib import closing
+from typing import Callable, Any
+
+_PYNPUT_ERROR = None
+try:
+    from pynput.mouse import Controller as MouseController, Button
+    from pynput.keyboard import Controller as KeyboardController, Key
+    _PYNPUT_AVAILABLE = True
+except Exception as exc:  # pragma: no cover - depends on environment
+    MouseController = None  # type: ignore
+    KeyboardController = None  # type: ignore
+    Button = type("Button", (), {"left": "left", "right": "right", "middle": "middle"})  # type: ignore
+    Key = type(
+        "Key",
+        (),
+        {
+            "enter": "enter",
+            "tab": "tab",
+            "esc": "esc",
+            "escape": "escape",
+            "backspace": "backspace",
+            "delete": "delete",
+            "space": "space",
+            "up": "up",
+            "down": "down",
+            "left": "left",
+            "right": "right",
+            "home": "home",
+            "end": "end",
+            "page_up": "page_up",
+            "page_down": "page_down",
+            "ctrl": "ctrl",
+            "alt": "alt",
+            "shift": "shift",
+            "cmd": "cmd",
+        },
+    )  # type: ignore
+    _PYNPUT_AVAILABLE = False
+    _PYNPUT_ERROR = exc
 
 # --- Config ---
 PIN_CODE = os.environ.get("MOUSE_PIN", "8900")  # set a PIN for pairing
 HOST = os.environ.get("MOUSE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT") or os.environ.get("MOUSE_PORT", "5000"))
+ENABLE_DEVICE_CONTROL = os.environ.get("ENABLE_DEVICE_CONTROL", "1").lower() in {"1", "true", "yes", "on"}
+
+
+class NoOpMouse:
+    def move(self, dx, dy):
+        pass
+
+    def press(self, button):
+        pass
+
+    def release(self, button):
+        pass
+
+    def click(self, button, count=1):
+        pass
+
+    def scroll(self, dx, dy):
+        pass
+
+
+class NoOpKeyboard:
+    def type(self, text):
+        pass
+
+    def press(self, key):
+        pass
+
+    def release(self, key):
+        pass
+
+
+def init_devices():
+    if ENABLE_DEVICE_CONTROL and _PYNPUT_AVAILABLE:
+        return MouseController(), KeyboardController(), "pynput"
+    reason = "disabled via ENABLE_DEVICE_CONTROL=0" if not ENABLE_DEVICE_CONTROL else f"pynput unavailable ({_PYNPUT_ERROR})"
+    print(f"[WARN] Falling back to no-op input devices: {reason}")
+    print("       Events will be logged but no mouse/keyboard actions will run on this host.")
+    return NoOpMouse(), NoOpKeyboard(), "noop"
 
 app = Flask(__name__, static_folder=".")
 socketio = SocketIO(app, cors_allowed_origins="*")  # LAN only; PIN gate below
 
-mouse = MouseController()
-keyboard = KeyboardController()
+mouse, keyboard, INPUT_BACKEND = init_devices()
 
 # Session auth (very light)
 authorized_clients = set()
@@ -37,8 +110,8 @@ def on_pair(data):
     else:
         emit("pair_ok", {"ok": False})
 
-def require_auth(func):
-    def wrapper(data):
+def require_auth(func: Callable[[dict], Any]) -> Callable[[dict], None]:
+    def wrapper(data) -> None:
         if request.sid not in authorized_clients:
             emit("error", {"msg": "Not paired"})
             return
@@ -140,6 +213,7 @@ if __name__ == "__main__":
     chosen_port, fell_back = pick_port(PORT)
     if fell_back:
         print(f"Port {PORT} in use; falling back to {chosen_port}.")
-    print(f"Phone-as-Mouse running on <IP>{chosen_port}  (PIN={PIN_CODE})")
+    print(f"Phone-as-Mouse running on http://<your-laptop-ip>:{chosen_port}  (PIN={PIN_CODE})")
+    print(f"Input backend: {INPUT_BACKEND}")
     # Use eventlet web server for WebSocket
     socketio.run(app, host=HOST, port=chosen_port)
