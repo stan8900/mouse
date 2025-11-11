@@ -7,11 +7,13 @@ from pynput.mouse import Controller as MouseController, Button
 from pynput.keyboard import Controller as KeyboardController, Key
 import eventlet
 import os
+import socket
+from contextlib import closing
 
 # --- Config ---
 PIN_CODE = os.environ.get("MOUSE_PIN", "8900")  # set a PIN for pairing
-HOST = "0.0.0.0"
-PORT = 5000
+HOST = os.environ.get("MOUSE_HOST", "0.0.0.0")
+PORT = int(os.environ.get("PORT") or os.environ.get("MOUSE_PORT", "5000"))
 
 app = Flask(__name__, static_folder=".")
 socketio = SocketIO(app, cors_allowed_origins="*")  # LAN only; PIN gate below
@@ -24,7 +26,7 @@ authorized_clients = set()
 
 @app.route("/")
 def root():
-    return send_from_directory(".", "client.html")
+    return send_from_directory(".", "index.html")
 
 @socketio.on("pair")
 def on_pair(data):
@@ -122,7 +124,22 @@ def on_key(data):
         keyboard.press(key_obj)
         keyboard.release(key_obj)
 
+def pick_port(preferred_port: int) -> tuple[int, bool]:
+    """Return a port that is free to bind; prefer preferred_port."""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((HOST, preferred_port))
+            return preferred_port, False
+        except OSError:
+            sock.bind((HOST, 0))
+            return sock.getsockname()[1], True
+
+
 if __name__ == "__main__":
-    print(f"Phone-as-Mouse running on http://<your-laptop-ip>:{PORT}  (PIN={PIN_CODE})")
+    chosen_port, fell_back = pick_port(PORT)
+    if fell_back:
+        print(f"Port {PORT} in use; falling back to {chosen_port}.")
+    print(f"Phone-as-Mouse running on <IP>{chosen_port}  (PIN={PIN_CODE})")
     # Use eventlet web server for WebSocket
-    socketio.run(app, host=HOST, port=PORT)
+    socketio.run(app, host=HOST, port=chosen_port)
