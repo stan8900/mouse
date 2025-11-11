@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+  <title>Phone Touchpad</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto; background:#111; color:#eee; }
+    .wrap { display:flex; flex-direction:column; gap:12px; padding:16px; max-width:820px; margin: 0 auto; }
+    .row { display:flex; gap:8px; }
+    input, button { font-size:16px; padding:12px; border-radius:12px; border:1px solid #333; background:#1a1a1a; color:#eee; }
+    button { cursor:pointer; }
+    #pad {
+      touch-action:none; user-select:none;
+      height: 60vh; border-radius:16px; border:1px solid #333; background:#151515;
+      display:flex; align-items:center; justify-content:center;
+    }
+    .hint { opacity:.65; font-size:14px; }
+    .kbd { display:grid; grid-template-columns: repeat(6, 1fr); gap:8px; }
+    .kbd button { padding:10px; }
+    .btns { display:flex; gap:8px; justify-content:space-between; }
+  </style>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-KswqQunyU7zXJlhS7wN2G2f9w5s2S8K6N0s4C2M0nHq1hId2QmQbH7gqk1v0w2+N" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row">
+      <input id="pin" placeholder="PIN (default 1234)" />
+      <button id="pairBtn">Pair</button>
+      <span id="status" class="hint">Not paired</span>
+    </div>
+
+    <div id="pad"><div class="hint">Touch & drag to move • Two-finger scroll • Tap = left click</div></div>
+
+    <div class="btns">
+      <button id="left">Left Click</button>
+      <button id="right">Right Click</button>
+      <button id="middle">Middle</button>
+    </div>
+
+    <div class="row">
+      <input id="text" placeholder="Type text here → Enter" />
+      <button id="send">Send</button>
+    </div>
+
+    <div class="kbd">
+      <button data-key="esc">Esc</button>
+      <button data-key="tab">Tab</button>
+      <button data-key="enter">Enter</button>
+      <button data-key="backspace">Backspace</button>
+      <button data-key="up">↑</button>
+      <button data-key="down">↓</button>
+      <button data-key="left">←</button>
+      <button data-key="right">→</button>
+      <button data-key="ctrl">Ctrl</button>
+      <button data-key="alt">Alt</button>
+      <button data-key="shift">Shift</button>
+      <button data-key="win">Win/Cmd</button>
+    </div>
+
+    <div class="hint">
+      Tips: quick tap = left click • press & hold then release = drag • two-finger move = scroll • enter your own PIN via MOUSE_PIN env var
+    </div>
+  </div>
+
+  <script>
+    // --- Socket ---
+    const socket = io();
+
+    const statusEl = document.getElementById("status");
+    const pinEl = document.getElementById("pin");
+    const pairBtn = document.getElementById("pairBtn");
+    pairBtn.onclick = () => {
+      socket.emit("pair", { pin: pinEl.value || "1234" });
+    };
+    socket.on("pair_ok", ({ ok }) => {
+      statusEl.textContent = ok ? "Paired ✅" : "Wrong PIN ❌";
+    });
+    socket.on("connect_error", () => statusEl.textContent = "Connection error");
+
+    // --- Mouse pad ---
+    const pad = document.getElementById("pad");
+    let lastTouch = null;
+    let lastDist = null;
+    let lastTwo = null;
+
+    const sendMove = (dx, dy) => socket.emit("move", { dx, dy });
+    const sendScroll = (dx, dy) => socket.emit("scroll", { dx, dy });
+
+    const getTouches = (e) => Array.from(e.touches).map(t => ({ x:t.clientX, y:t.clientY, id:t.identifier }));
+
+    pad.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      const ts = getTouches(e);
+      if (ts.length === 1) lastTouch = ts[0];
+      if (ts.length === 2) lastTwo = ts;
+    }, { passive: false });
+
+    pad.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+      const ts = getTouches(e);
+
+      // Two-finger scroll
+      if (ts.length === 2 && lastTwo && lastTwo.length === 2) {
+        const mid = (arr) => ({ x:(arr[0].x+arr[1].x)/2, y:(arr[0].y+arr[1].y)/2 });
+        const prevMid = mid(lastTwo);
+        const nowMid  = mid(ts);
+        const dx = nowMid.x - prevMid.x;
+        const dy = nowMid.y - prevMid.y;
+        sendScroll(dx * 0.2, dy * 0.2);
+        lastTwo = ts;
+        return;
+      }
+
+      // One-finger move
+      if (ts.length === 1 && lastTouch) {
+        const dx = ts[0].x - lastTouch.x;
+        const dy = ts[0].y - lastTouch.y;
+        sendMove(dx, dy);
+        lastTouch = ts[0];
+      }
+    }, { passive: false });
+
+    pad.addEventListener("touchend", (e) => {
+      e.preventDefault();
+      if (e.touches.length === 0) {
+        // simple tap detection (quick end)
+        if (e.changedTouches && e.changedTouches.length === 1) {
+          socket.emit("tap", { button: "left" });
+        }
+        lastTouch = null;
+        lastTwo = null;
+      }
+    }, { passive: false });
+
+    // Buttons
+    document.getElementById("left").onclick   = () => socket.emit("tap", { button: "left" });
+    document.getElementById("right").onclick  = () => socket.emit("tap", { button: "right" });
+    document.getElementById("middle").onclick = () => socket.emit("tap", { button: "middle" });
+
+    // Typing
+    const textEl = document.getElementById("text");
+    const sendBtn = document.getElementById("send");
+    const sendText = () => {
+      const v = textEl.value;
+      if (v) socket.emit("type_text", { text: v });
+      textEl.value = "";
+    };
+    sendBtn.onclick = sendText;
+    textEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        sendText();
+      }
+    });
+
+    // Quick special keys
+    document.querySelectorAll(".kbd button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        socket.emit("key", { key: btn.dataset.key });
+      });
+    });
+  </script>
+</body>
+</html>
